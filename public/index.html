@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Discord Email Auth Bot</title>
+
+    <!-- update the version number as needed -->
+    <script defer src="/__/firebase/7.14.0/firebase-app.js"></script>
+    <!-- include only the Firebase features as you need -->
+    <script defer src="/__/firebase/7.14.0/firebase-auth.js"></script>
+    <script defer src="/__/firebase/7.14.0/firebase-functions.js"></script>
+    <!-- initialize the SDK after all desired features are loaded -->
+    <script defer src="/__/firebase/init.js"></script>
+  </head>
+  <body>
+    <h1>Discord Email Auth Bot</h1>
+
+    <div id="status">ロード中</div>
+
+    <div id="step1" style="display:none">
+      <h2>学籍番号入力</h2>
+      <p>学籍番号を入力してください</p>
+      <form id="step1form">
+        <input id="userID" type="text" name="userID" placeholder="202099999">
+        <input type="submit" value="メール送信">
+      </form>
+    </div>
+
+    <div id="step2" style="display:none">
+      <h2>メールアドレス確認</h2>
+      <p>確認のため<span style="color: red">メールアドレス</span>を入力してください</p>
+      <form id="step2form">
+        <input id="email" type="text" name="email" placeholder="s2012345@coins.tsukuba.ac.jp">
+        <input type="submit" value="確認">
+      </form>
+    </div>
+
+    <div id="step3" style="display:none">
+      <h2>Discord 連携</h2>
+      <p>メールアドレスの確認が完了しました。 <span style="color: red">まだ作業は完了していません。</span> Discord と連携してください</p>
+      <a id="discordAuthLink" href="#">Discord と連携</a>
+    </div>
+
+    <div id="step4" style="display:none">
+      <h2>完了</h2>
+      <p><span id="discordName"></span> との連携が完了しました。 Discord に戻って確認してください。</p>
+    </div>
+
+    <p>困ったらご気軽にご相談ください</p>
+
+    <script>
+      function startStep1() {
+        document.getElementById('status').textContent = '';
+        document.getElementById('step1').style.display = 'block';
+        document.getElementById('step1form').addEventListener('submit', async function(e) {
+          e.preventDefault();
+          document.getElementById('step1').style.display = 'none';
+          document.getElementById('status').textContent = 'メール送信中';
+          const id = document.getElementById('userID').value;
+          try {
+            const getEmailResult = await firebase.functions().httpsCallable('getEmail')({ id });
+            const email = getEmailResult.data.email;
+            await firebase.auth().sendSignInLinkToEmail(email, {
+              url: document.location.href,
+              handleCodeInApp: true,
+            });
+            window.localStorage.setItem('email', email);
+            document.getElementById('status').textContent = 'メールを送信しました。 @coins.tsukuba.ac.jp のメールを確認してください。';
+          } catch(error) {
+            if (error.message === 'User not found') {
+              document.getElementById('status').textContent = '登録されていない学籍番号です。学籍番号を確認してください。それでもだめな場合はお問い合わせください。';
+              document.getElementById('status').style.color = 'red';
+              return;
+            }
+            console.error(error);
+            document.getElementById('status').textContent = `エラーが発生しました: ${error}`;
+            document.getElementById('status').style.color = 'red';
+          }
+        });
+      }
+
+      function startStep2() {
+        document.getElementById('status').textContent = '';
+        document.getElementById('step2').style.display = 'block';
+        document.getElementById('step2form').addEventListener('submit', function(e) {
+          e.preventDefault();
+          document.getElementById('step2').style.display = 'none';
+          document.getElementById('status').textContent = '認証中';
+          const email = document.getElementById('email').value;
+          firebase.auth().signInWithEmailLink(email, window.location.href)
+            .then(function(result) {
+              startStep3();
+            })
+            .catch(function(error) {
+              console.error(error);
+              document.getElementById('status').textContent = `エラーが発生しました: ${error}`;
+              document.getElementById('status').style.color = 'red';
+            });
+        });
+      }
+
+      async function startStep3() {
+        document.getElementById('status').textContent = '';
+
+        const getEmailResult = await firebase.functions().httpsCallable('getDiscordAuthURL')();
+        const { href, state } = getEmailResult.data;
+        window.localStorage.setItem('state', state);
+
+        document.getElementById('discordAuthLink').href = href;
+        document.getElementById('step3').style.display = 'block';
+      }
+
+      async function startStep4(query) {
+        document.getElementById('status').textContent = '処理中';
+
+        const localState = window.localStorage.getItem('state');
+        if (!localState) {
+          console.error('no local state');
+          document.getElementById('status').textContent = 'エラーが発生しました: no local state';
+          document.getElementById('status').style.color = 'red';
+          return;
+        }
+        if (query['state'] !== localState) {
+          console.error('state not match');
+          console.log(query['state']);
+          console.log(localState);
+          document.getElementById('status').textContent = `エラーが発生しました: state not match (${query['state']} != ${localState})`;
+          document.getElementById('status').style.color = 'red';
+          return;
+        }
+        window.localStorage.removeItem('state');
+
+        const result = await firebase.functions().httpsCallable('authDiscord')({ code: query['code'] });
+
+        document.getElementById('discordName').textContent = result.data.discord_name;
+        document.getElementById('step4').style.display = 'block';
+      }
+
+      function getQueryString() {
+        const search = window.document.location.search;
+        const start = search.indexOf('?');
+        if (start < 0) {
+          return {};
+        }
+        const elements = search.substring(start+1).split('&');
+        const query = {};
+        for (let i = 0; i < elements.length; i++) {
+          const parts = elements[i].split('=');
+          query[decodeURIComponent(parts[0])] = decodeURIComponent(parts[1] || 0);
+        }
+        return query;
+      }
+
+      document.addEventListener('DOMContentLoaded', function() {
+        try {
+          const app = firebase.app();
+          if (firebase.auth().isSignInWithEmailLink(window.location.href)) {
+            const email = window.localStorage.getItem('email');
+            if (!email) {
+              startStep2();
+              return;
+            }
+            firebase.auth().signInWithEmailLink(email, window.location.href)
+              .then(function(result) {
+                window.localStorage.removeItem('email');
+                startStep3();
+              })
+              .catch(function(error) {
+                console.error(error);
+                document.getElementById('status').textContent = `エラーが発生しました: ${error}`;
+                document.getElementById('status').style.color = 'red';
+              });
+            return;
+          }
+          let initialized = false;
+          firebase.auth().onAuthStateChanged((user) => {
+            if (initialized) return;
+            initialized = true;
+            if (user) {
+              const query = getQueryString();
+              if (query['code'] && query['state']) {
+                startStep4(query);
+              } else {
+                startStep3();
+              }
+            } else {
+              startStep1();
+            }
+          });
+        } catch (e) {
+          console.error(e);
+          document.getElementById('status').textContent = `エラーが発生しました: ${e}`;
+          document.getElementById('status').style.color = 'red';
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "users": [
+    {
+      "id": "202099999",
+      "email": "s2099999@coins.tsukuba.ac.jp",
+      "roles": [
+        "DISCORD_ROLE_ID_NUMBER"
+      ]
+    }
+  ]
+}
